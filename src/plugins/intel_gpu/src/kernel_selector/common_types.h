@@ -182,6 +182,7 @@ enum class ActivationFunction {
     NOT,
     POW,
     ERF,
+    ERFINV,
     HARD_SIGMOID,
     HSIGMOID,
     RECIPROCAL,

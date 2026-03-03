@@ -1001,6 +1001,8 @@ kernel_selector::activation_function get_kernel_selector_activation_param(activa
             return kernel_selector::activation_function::POW;
         case cldnn::activation_func::erf:
             return kernel_selector::activation_function::ERF;
+        case cldnn::activation_func::erfinv:
+            return kernel_selector::activation_function::ERFINV;
         case cldnn::activation_func::reciprocal:
             return kernel_selector::activation_function::RECIPROCAL;
         case cldnn::activation_func::selu:

@@ -1263,6 +1263,71 @@ JitConstants MakeActivationJitConstants(ActivationFunction activation_function,
         case ActivationFunction::ERF:
             jitConstants.AddConstant(MakeJitConstant(macro_def, erf(input).str()));
             break;
+        case ActivationFunction::ERFINV: {
+            // Inverse error function using rational polynomial approximation
+            // with 2 Newton-Raphson refinement steps (matching PyTorch calc_erfinv)
+            std::string type_suffix = out_dt == Datatype::F32 ? "f" : "h";
+
+            // Central range coefficients (|y| <= 0.7)
+            const JitTerm a0("0.886226899" + type_suffix);
+            const JitTerm a1("-1.645349621" + type_suffix);
+            const JitTerm a2("0.914624893" + type_suffix);
+            const JitTerm a3("-0.140543331" + type_suffix);
+            const JitTerm b0("-2.118377725" + type_suffix);
+            const JitTerm b1("1.442710462" + type_suffix);
+            const JitTerm b2("-0.329097515" + type_suffix);
+            const JitTerm b3("0.012229801" + type_suffix);
+
+            // Tail range coefficients (0.7 < |y| < 1.0)
+            const JitTerm c0("-1.970840454" + type_suffix);
+            const JitTerm c1("-1.624906493" + type_suffix);
+            const JitTerm c2("3.429567803" + type_suffix);
+            const JitTerm c3("1.641345311" + type_suffix);
+            const JitTerm d0("3.543889200" + type_suffix);
+            const JitTerm d1("1.637067800" + type_suffix);
+
+            const JitTerm central_range("0.7" + type_suffix);
+            const JitTerm two("2.0" + type_suffix);
+            const JitTerm neg_two("-2.0" + type_suffix);
+            // 2/sqrt(pi), constant for Newton-Raphson correction
+            const JitTerm two_over_sqrtpi("1.1283791670955126" + type_suffix);
+            const JitTerm inf_val("INFINITY");
+            const JitTerm nan_val("NAN");
+
+            // |y|
+            const JitTerm abs_y{"fabs(" + input.str() + ")"};
+
+            // Central range: z = y*y, Horner evaluation
+            const JitTerm z_c = input * input;
+            const JitTerm num_c = ((a3 * z_c + a2) * z_c + a1) * z_c + a0;
+            const JitTerm dem_c = (((b3 * z_c + b2) * z_c + b1) * z_c + b0) * z_c + one;
+            const JitTerm x_central = input * num_c / dem_c;
+
+            // Tail range: z = sqrt(-2 * log((1 - |y|) / 2))
+            const JitTerm z_t{"sqrt(" + neg_two.str() + " * log((" + one.str() + " - fabs(" + input.str() + ")) / " + two.str() + "))"};
+            const JitTerm num_t = ((c3 * z_t + c2) * z_t + c1) * z_t + c0;
+            const JitTerm dem_t = (d1 * z_t + d0) * z_t + one;
+            // copysign(num/dem, y) emulated as ternary
+            const JitTerm x_tail_abs = num_t / dem_t;
+            const JitTerm x_tail = ternary(input.ge(zero), x_tail_abs, neg(x_tail_abs));
+
+            // Select central or tail region
+            const JitTerm x0 = ternary(abs_y.le(central_range), x_central, x_tail);
+
+            // Newton-Raphson refinement step 1: x1 = x0 - (erf(x0) - y) / (2/sqrt(pi) * exp(-x0^2))
+            const JitTerm x1 = x0 - (erf(x0) - input) / (two_over_sqrtpi * exp(neg(x0 * x0)));
+
+            // Newton-Raphson refinement step 2
+            const JitTerm x2 = x1 - (erf(x1) - input) / (two_over_sqrtpi * exp(neg(x1 * x1)));
+
+            // Edge cases: |y| > 1 -> NaN, |y| == 1 -> copysign(inf, y)
+            const JitTerm copysign_inf = ternary(input.ge(zero), inf_val, neg(inf_val));
+            const JitTerm result = ternary(abs_y.gt(one), nan_val,
+                                           ternary(abs_y.eq(one), copysign_inf, x2));
+
+            jitConstants.AddConstant(MakeJitConstant(macro_def, result.str()));
+            break;
+        }
         case ActivationFunction::HARD_SIGMOID: {
             auto alpha = disable_type_conversion ? "m"_jit : to_type("m"_jit);
             auto beta =  disable_type_conversion ? "n"_jit : to_type("n"_jit);

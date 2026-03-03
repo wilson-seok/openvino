@@ -943,6 +943,9 @@ JitConstants make_activation_jit_constants(const std::string& suffix,
     case activation_func::erf:
         jit.add(make_jit_constant(macro_def, erf(input)));
         break;
+    case activation_func::erfinv:
+        jit.add(make_jit_constant(macro_def, erfinv(input, type_suffix.str())));
+        break;
     case activation_func::hard_sigmoid: {
         const JitTerm alpha = convert_to_type("m"_jit, calc_dt);
         const JitTerm beta = convert_to_type("n"_jit, calc_dt);

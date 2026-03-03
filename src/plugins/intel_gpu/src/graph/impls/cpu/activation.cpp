@@ -242,6 +242,7 @@ struct activation_impl : public typed_primitive_impl<activation> {
                 op = std::make_shared<ov::op::v0::Sqrt>(); break;
             case activation_func::hard_sigmoid:
             case activation_func::selu:
+            case activation_func::erfinv:
             default:
                 OPENVINO_THROW("[GPU] Couldn't create activation operation: unsupported activation type ",
                                "(", static_cast<size_t>(activation_function), ") for primitive with id ", instance.id());

@@ -254,6 +254,68 @@ inline JitTerm exp(const JitTerm& arg) {
 inline JitTerm erf(const JitTerm& arg) {
     return JitTerm{"erf(" + arg.str() + ")"};
 }
+inline JitTerm erfinv(const JitTerm& input, const std::string& type_suffix) {
+    // Inverse error function using rational polynomial approximation
+    // with 2 Newton-Raphson refinement steps (matching PyTorch calc_erfinv)
+    const JitTerm zero = JitTerm{"0.0" + type_suffix};
+    const JitTerm one = JitTerm{"1.0" + type_suffix};
+
+    // Central range coefficients (|y| <= 0.7)
+    const JitTerm a0{"0.886226899" + type_suffix};
+    const JitTerm a1{"-1.645349621" + type_suffix};
+    const JitTerm a2{"0.914624893" + type_suffix};
+    const JitTerm a3{"-0.140543331" + type_suffix};
+    const JitTerm b0{"-2.118377725" + type_suffix};
+    const JitTerm b1{"1.442710462" + type_suffix};
+    const JitTerm b2{"-0.329097515" + type_suffix};
+    const JitTerm b3{"0.012229801" + type_suffix};
+
+    // Tail range coefficients (0.7 < |y| < 1.0)
+    const JitTerm c0{"-1.970840454" + type_suffix};
+    const JitTerm c1{"-1.624906493" + type_suffix};
+    const JitTerm c2{"3.429567803" + type_suffix};
+    const JitTerm c3{"1.641345311" + type_suffix};
+    const JitTerm d0{"3.543889200" + type_suffix};
+    const JitTerm d1{"1.637067800" + type_suffix};
+
+    const JitTerm central_range{"0.7" + type_suffix};
+    const JitTerm two{"2.0" + type_suffix};
+    const JitTerm neg_two{"-2.0" + type_suffix};
+    const JitTerm two_over_sqrtpi{"1.1283791670955126" + type_suffix};
+    const JitTerm inf_val{"INFINITY"};
+    const JitTerm nan_val{"NAN"};
+
+    // |y|
+    const JitTerm abs_y = fabs(input);
+
+    // Central range: z = y*y, Horner evaluation
+    const JitTerm z_c = input * input;
+    const JitTerm num_c = ((a3 * z_c + a2) * z_c + a1) * z_c + a0;
+    const JitTerm dem_c = (((b3 * z_c + b2) * z_c + b1) * z_c + b0) * z_c + one;
+    const JitTerm x_central = input * num_c / dem_c;
+
+    // Tail range: z = sqrt(-2 * log((1 - |y|) / 2))
+    const JitTerm z_t = sqrt(neg_two * log((one - fabs(input)) / two));
+    const JitTerm num_t = ((c3 * z_t + c2) * z_t + c1) * z_t + c0;
+    const JitTerm dem_t = (d1 * z_t + d0) * z_t + one;
+    // copysign emulated via ternary
+    const JitTerm x_tail_abs = num_t / dem_t;
+    const JitTerm x_tail = ternary(input.ge(zero), x_tail_abs, neg(x_tail_abs));
+
+    // Select central or tail region
+    const JitTerm x0 = ternary(abs_y.le(central_range), x_central, x_tail);
+
+    // Newton-Raphson refinement step 1
+    const JitTerm x1 = x0 - (erf(x0) - input) / (two_over_sqrtpi * exp(neg(x0 * x0)));
+
+    // Newton-Raphson refinement step 2
+    const JitTerm x2 = x1 - (erf(x1) - input) / (two_over_sqrtpi * exp(neg(x1 * x1)));
+
+    // Edge cases: |y| > 1 -> NaN, |y| == 1 -> copysign(inf, y)
+    const JitTerm copysign_inf = ternary(input.ge(zero), inf_val, neg(inf_val));
+    return ternary(abs_y.gt(one), nan_val,
+                   ternary(abs_y.eq(one), copysign_inf, x2));
+}
 inline JitTerm sin(const JitTerm& arg) {
     return JitTerm{"sin(" + arg.str() + ")"};
 }
