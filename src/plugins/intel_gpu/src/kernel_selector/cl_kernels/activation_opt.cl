@@ -21,7 +21,14 @@ KERNEL(activation)(
 
     input_t v = ((__global input_t*) (input + input_offset))[0];
 
+#ifdef ACTIVATION_SCALAR_ONLY
+    v.s0 = ACTIVATION_KERNEL(v.s0, ACTIVATION_PARAMS_KERNEL);
+    v.s1 = ACTIVATION_KERNEL(v.s1, ACTIVATION_PARAMS_KERNEL);
+    v.s2 = ACTIVATION_KERNEL(v.s2, ACTIVATION_PARAMS_KERNEL);
+    v.s3 = ACTIVATION_KERNEL(v.s3, ACTIVATION_PARAMS_KERNEL);
+#else
     v = ACTIVATION_KERNEL(v, ACTIVATION_PARAMS_KERNEL);
+#endif
 
 #if HAS_FUSED_OPS
     output_t result;

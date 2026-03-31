@@ -69,6 +69,7 @@ std::string toString(ActivationFunction activation) {
         case ActivationFunction::CEIL:                      method = "CEIL"; break;
         case ActivationFunction::NEGATIVE:                  method = "NEGATIVE"; break;
         case ActivationFunction::ERF:                       method = "ERF"; break;
+        case ActivationFunction::ERFINV:                    method = "ERFINV"; break;
         case ActivationFunction::HARD_SIGMOID:              method = "HARD_SIGMOID"; break;
         case ActivationFunction::HSIGMOID:                  method = "HSIGMOID"; break;
         case ActivationFunction::RECIPROCAL:                method = "RECIPROCAL"; break;
