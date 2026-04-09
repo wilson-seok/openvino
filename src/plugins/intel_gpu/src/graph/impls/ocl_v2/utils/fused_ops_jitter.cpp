@@ -943,6 +943,35 @@ JitConstants make_activation_jit_constants(const std::string& suffix,
     case activation_func::erf:
         jit.add(make_jit_constant(macro_def, erf(input)));
         break;
+    case activation_func::erfinv: {
+        // Inverse error function using Mike Giles' rational polynomial approximation.
+        // Branch on w = -log(1-x*x): central (w < 5) and tail (w >= 5).
+        std::string x = "((float)(input))";
+        std::string w = "(-log(1.0f - " + x + " * " + x + "))";
+        // Central region: w - 2.5
+        std::string wc = "(" + w + " - 2.5f)";
+        std::string pc = "(((((((((2.81022636e-08f * " + wc + " + 3.43273939e-07f) * " + wc
+            + " + (-3.5233877e-06f)) * " + wc + " + (-4.39150654e-06f)) * " + wc
+            + " + 0.00021858087f) * " + wc + " + (-0.00125372503f)) * " + wc
+            + " + (-0.00417768164f)) * " + wc + " + 0.246640727f) * " + wc
+            + " + 1.50140941f) * " + x + ")";
+        // Tail region: sqrt(w) - 3.0
+        std::string wt = "(sqrt(" + w + ") - 3.0f)";
+        std::string pt = "(((((((((-0.000200214257f * " + wt + " + 0.000100950558f) * " + wt
+            + " + 0.00134934322f) * " + wt + " + (-0.00367342844f)) * " + wt
+            + " + 0.00573950773f) * " + wt + " + (-0.0076224613f)) * " + wt
+            + " + 0.00943887047f) * " + wt + " + 1.00167406f) * " + wt
+            + " + 2.83297682f) * " + x + ")";
+        std::string poly_expr = "(" + w + " < 5.0f ? " + pc + " : " + pt + ")";
+        // Handle boundary: |x| >= 1 → copysign(INFINITY, x)
+        std::string erfinv_expr = "(fabs(" + x + ") >= 1.0f ? copysign(INFINITY, " + x + ") : " + poly_expr + ")";
+        if (out_dt == ov::element::f16) {
+            jit.add(make_jit_constant(macro_def, JitTerm{"convert_half(" + erfinv_expr + ")"}));
+        } else {
+            jit.add(make_jit_constant(macro_def, JitTerm{erfinv_expr}));
+        }
+        break;
+    }
     case activation_func::hard_sigmoid: {
         const JitTerm alpha = convert_to_type("m"_jit, calc_dt);
         const JitTerm beta = convert_to_type("n"_jit, calc_dt);

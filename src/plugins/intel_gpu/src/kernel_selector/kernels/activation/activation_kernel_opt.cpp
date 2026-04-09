@@ -110,6 +110,10 @@ JitConstants ActivationKernelOpt::GetJitConstants(const activation_params& param
     auto input_dt = params.inputs[0].GetDType();
 
     jit.AddConstant(MakeJitConstant("NUM_COLS_WI", NUM_COLS_WI));
+    // ERFINV uses scalar casts and ternary operator — apply per-component in vectorized kernel
+    if (params.activations[0].function == ActivationFunction::ERFINV) {
+        jit.AddConstant(MakeJitConstant("ACTIVATION_SCALAR_ONLY", 1));
+    }
     if (!params.fused_ops.empty()) {
         bool can_use_vector = params.inputs[0].X().v % 4 == 0;
         jit.AddConstant(MakeJitConstant("CAN_USE_VECTOR", can_use_vector));

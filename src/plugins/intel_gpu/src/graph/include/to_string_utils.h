@@ -66,6 +66,7 @@ inline std::string activation_type_to_str(activation_func activation) {
     case activation_func::pow: return "pow";
     case activation_func::reciprocal: return "reciprocal";
     case activation_func::erf: return "erf";
+    case activation_func::erfinv: return "erfinv";
     case activation_func::hard_sigmoid: return "hard_sigmoid";
     case activation_func::hsigmoid: return "hsigmoid";
     case activation_func::selu: return "selu";

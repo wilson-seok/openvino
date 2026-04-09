@@ -17,6 +17,8 @@
 
 #include <cmath>
 #include <algorithm>
+#include <chrono>
+#include <iomanip>
 
 using namespace cldnn;
 using namespace ::tests;
@@ -316,6 +318,137 @@ TEST(activation_f32_fw_gpu, erf_basic_yxfb) {
     for (int i = 0; i < b_size * f_size * y_size * x_size; ++i) {
         ASSERT_FLOAT_EQ(std::erf(input_ptr[i]), output_ptr[i]);
     }
+}
+
+TEST(activation_f32_fw_gpu, erfinv_basic_yxfb) {
+    //  Input values in (-1, 1) — the domain of erfinv
+    //  Verify that erf(erfinv(x)) == x (the defining identity)
+
+    auto& engine = get_test_engine();
+
+    auto input = engine.allocate_memory({ data_types::f32, format::yxfb, { 1, 1, 5, 4 } });
+    set_values(input,
+               { 0.0f, 0.1f, -0.3f, 0.5f, 0.7f,
+                -0.1f, 0.2f, 0.3f, 0.4f, -0.6f,
+                 0.9f, -0.9f, 0.8f, -0.5f, 0.05f,
+                -0.05f, 0.99f, -0.99f, 0.0f, 0.6f });
+
+    topology topology(
+            input_layout("input", input->get_layout()),
+            activation("erfinv", input_info("input"), activation_func::erfinv));
+    network network(engine, topology, get_test_default_config(engine));
+    network.set_input_data("input", input);
+    auto outputs = network.execute();
+    ASSERT_EQ(outputs.size(), size_t(1));
+    ASSERT_EQ(outputs.begin()->first, "erfinv");
+
+    auto output_memory = outputs.at("erfinv").get_memory();
+    auto output_layout = output_memory->get_layout();
+    cldnn::mem_lock<float> output_ptr(output_memory, get_test_stream());
+    cldnn::mem_lock<float> input_ptr(input, get_test_stream());
+
+    int y_size = output_layout.spatial(1);
+    int x_size = output_layout.spatial(0);
+    int f_size = output_layout.feature();
+    int b_size = output_layout.batch();
+    ASSERT_EQ(output_layout.format, format::yxfb);
+    ASSERT_EQ(y_size, 4);
+    ASSERT_EQ(x_size, 5);
+    ASSERT_EQ(f_size, 1);
+    ASSERT_EQ(b_size, 1);
+
+    for (int i = 0; i < b_size * f_size * y_size * x_size; ++i) {
+        // Validate erfinv by checking erf(erfinv(x)) ≈ x
+        float result = output_ptr[i];
+        float roundtrip = std::erff(result);
+        ASSERT_NEAR(input_ptr[i], roundtrip, 1e-5f);
+    }
+}
+
+TEST(activation_f32_fw_gpu, erfinv_boundary_values) {
+    // Test erfinv(0) = 0, erfinv(1) = inf, erfinv(-1) = -inf
+
+    auto& engine = get_test_engine();
+
+    auto input = engine.allocate_memory({ data_types::f32, format::bfyx, { 1, 1, 3, 1 } });
+    set_values(input, { 0.0f, 1.0f, -1.0f });
+
+    topology topology(
+            input_layout("input", input->get_layout()),
+            activation("erfinv", input_info("input"), activation_func::erfinv));
+    network network(engine, topology, get_test_default_config(engine));
+    network.set_input_data("input", input);
+    auto outputs = network.execute();
+
+    auto output_memory = outputs.at("erfinv").get_memory();
+    cldnn::mem_lock<float> output_ptr(output_memory, get_test_stream());
+
+    ASSERT_FLOAT_EQ(0.0f, output_ptr[0]);                         // erfinv(0) = 0
+    ASSERT_TRUE(std::isinf(output_ptr[1]) && output_ptr[1] > 0);  // erfinv(1) = +inf
+    ASSERT_TRUE(std::isinf(output_ptr[2]) && output_ptr[2] < 0);  // erfinv(-1) = -inf
+}
+
+TEST(activation_f32_fw_gpu, erfinv_perf_benchmark) {
+    // Benchmark erfinv across multiple tensor sizes.
+    // Prints CSV: shape, total_elements, avg_us (microseconds per iteration)
+    auto& engine = get_test_engine();
+
+    struct ShapeConfig {
+        int b, f, y, x;
+    };
+    std::vector<ShapeConfig> shapes = {
+        {1, 1, 16, 16},        // 256
+        {1, 1, 64, 64},        // 4K
+        {1, 1, 256, 256},      // 64K
+        {1, 16, 256, 256},     // 1M
+        {1, 64, 256, 256},     // 4M
+        {1, 128, 256, 256},    // 8M
+        {1, 256, 256, 256},    // 16M
+        {4, 256, 256, 256},    // 64M
+    };
+
+    const int warmup = 10;
+    const int iterations = 50;
+
+    std::cout << "\n[ERFINV BENCHMARK] shape, elements, avg_us\n";
+    for (auto& s : shapes) {
+        int total = s.b * s.f * s.y * s.x;
+        auto input_mem = engine.allocate_memory({ data_types::f32, format::bfyx,
+                                                   { s.b, s.f, s.x, s.y } });
+        // Fill with values in (-1, 1)
+        std::vector<float> input_data(total);
+        for (int i = 0; i < total; ++i)
+            input_data[i] = -0.99f + 1.98f * (static_cast<float>(i) / static_cast<float>(total));
+        set_values(input_mem, input_data);
+
+        topology topo(
+            input_layout("input", input_mem->get_layout()),
+            activation("erfinv", input_info("input"), activation_func::erfinv));
+        network net(engine, topo, get_test_default_config(engine));
+        net.set_input_data("input", input_mem);
+
+        // Warmup
+        for (int i = 0; i < warmup; ++i) {
+            net.execute();
+            net.get_stream().finish();
+        }
+
+        // Timed iterations
+        auto start = std::chrono::high_resolution_clock::now();
+        for (int i = 0; i < iterations; ++i) {
+            net.execute();
+            net.get_stream().finish();
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+
+        double avg_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count()
+                        / static_cast<double>(iterations);
+        std::cout << "[ERFINV BENCHMARK] "
+                  << s.b << "x" << s.f << "x" << s.y << "x" << s.x
+                  << ", " << total
+                  << ", " << std::fixed << std::setprecision(1) << avg_us << "\n";
+    }
+    std::cout << "[ERFINV BENCHMARK] done\n";
 }
 
 TEST(activation_f32_fw_gpu, hard_sigmoid_basic_yxfb) {
@@ -1106,6 +1239,12 @@ TEST(activation_f32_fw_gpu, basic_yxfb_all_functions)
                     ASSERT_NEAR(0.5f * (float)input_ptr[i] * (1.f + std::erf((float)(input_ptr[i]) / std::sqrt(2.0f))),
                                 output_ptr[i], 1e-5f);
                     break;
+                case activation_func::erfinv: {
+                    // Use erf(erfinv(x)) == x identity for validation
+                    float expected = std::erff(output_ptr[i]);
+                    ASSERT_NEAR(input_ptr[i], expected, 1e-4f);
+                    break;
+                }
                 case activation_func::hsigmoid:
                     ASSERT_FLOAT_EQ(std::fmin(std::fmax(0.f, (float)input_ptr[i] + 3.f), 6.f) / 6.f, output_ptr[i]);
                     break;
@@ -2131,6 +2270,7 @@ const std::vector<activation_func> activationFunctions = {activation_func::none,
                                                           activation_func::pow,
                                                           activation_func::reciprocal,
                                                           activation_func::erf,
+//                                                          activation_func::erfinv,
                                                           activation_func::hard_sigmoid,
                                                           activation_func::hsigmoid,
                                                           activation_func::selu,
